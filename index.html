@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Web Camera Raw</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+        body, html { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #fff; user-select: none; -webkit-user-select: none; }
+        #app { display: flex; flex-direction: column; width: 100%; height: 100%; }
+        
+        /* 顶部导航 */
+        header { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: #111; border-bottom: 1px solid #222; }
+        .btn { background: none; border: none; color: #fff; font-size: 14px; cursor: pointer; padding: 6px 12px; border-radius: 6px; }
+        .btn-primary { color: #f5c518; font-weight: bold; }
+        
+        /* 视口画布 */
+        #canvas-container { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; background: #080808; overflow: hidden; }
+        canvas { max-width: 100%; max-height: 100%; object-fit: contain; }
+        
+        /* 底部控制面板 */
+        #panel { height: 260px; background: #161616; display: flex; flex-direction: column; border-top: 1px solid #2a2a2a; }
+        .tabs { display: flex; border-bottom: 1px solid #262626; }
+        .tab { flex: 1; text-align: center; padding: 10px 0; font-size: 13px; color: #888; cursor: pointer; }
+        .tab.active { color: #f5c518; font-weight: bold; border-bottom: 2px solid #f5c518; }
+        
+        .slider-group { flex: 1; overflow-y: auto; padding: 16px 20px; display: none; }
+        .slider-group.active { display: block; }
+        
+        /* 自定义滑块 */
+        .slider-item { margin-bottom: 14px; }
+        .slider-header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; color: #bbb; }
+        .slider-val { font-family: monospace; color: #f5c518; }
+        input[type=range] { -webkit-appearance: none; width: 100%; height: 6px; background: #333; border-radius: 3px; outline: none; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
+        
+        /* 上传占位提示 */
+        #placeholder { position: absolute; color: #666; font-size: 14px; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <header>
+        <button class="btn" onclick="document.getElementById('file-input').click()">打开照片</button>
+        <span style="font-size: 13px; color: #888;">Camera Raw Web</span>
+        <button class="btn btn-primary" onclick="exportFullRes()">导出照片</button>
+    </header>
+
+    <div id="canvas-container">
+        <canvas id="gl-canvas"></canvas>
+        <div id="placeholder">点击左上角「打开照片」开始</div>
+    </div>
+
+    <div id="panel">
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab(0)">光影</div>
+            <div class="tab" onclick="switchTab(1)">HSL 色彩</div>
+            <div class="tab" onclick="switchTab(2)">细节锐化</div>
+        </div>
+
+        <!-- 1. 光影组 -->
+        <div class="slider-group active" id="tab-0">
+            <div class="slider-item">
+                <div class="slider-header"><span>曝光</span><span class="slider-val" id="val-exposure">0.0</span></div>
+                <input type="range" min="-5" max="5" step="0.1" value="0" id="exposure" oninput="updateParam('exposure', this.value)">
+            </div>
+            <div class="slider-item">
+                <div class="slider-header"><span>对比度</span><span class="slider-val" id="val-contrast">0</span></div>
+                <input type="range" min="-100" max="100" value="0" id="contrast" oninput="updateParam('contrast', this.value)">
+            </div>
+            <div class="slider-item">
+                <div class="slider-header"><span>高光</span><span class="slider-val" id="val-highlights">0</span></div>
+                <input type="range" min="-100" max="100" value="0" id="highlights" oninput="updateParam('highlights', this.value)">
+            </div>
+            <div class="slider-item">
+                <div class="slider-header"><span>阴影</span><span class="slider-val" id="val-shadows">0</span></div>
+                <input type="range" min="-100" max="100" value="0" id="shadows" oninput="updateParam('shadows', this.value)">
+            </div>
+        </div>
+
+        <!-- 2. HSL 组 -->
+        <div class="slider-group" id="tab-1">
+            <div class="slider-item">
+                <div class="slider-header"><span>橙色饱和度 (肤色)</span><span class="slider-val" id="val-sat-orange">0</span></div>
+                <input type="range" min="-100" max="100" value="0" oninput="updateHSL(1, this.value, 'val-sat-orange')">
+            </div>
+            <div class="slider-item">
+                <div class="slider-header"><span>绿色饱和度 (植被)</span><span class="slider-val" id="val-sat-green">0</span></div>
+                <input type="range" min="-100" max="100" value="0" oninput="updateHSL(3, this.value, 'val-sat-green')">
+            </div>
+            <div class="slider-item">
+                <div class="slider-header"><span>蓝色饱和度 (天空)</span><span class="slider-val" id="val-sat-blue">0</span></div>
+                <input type="range" min="-100" max="100" value="0" oninput="updateHSL(5, this.value, 'val-sat-blue')">
+            </div>
+        </div>
+
+        <!-- 3. 细节锐化组 -->
+        <div class="slider-group" id="tab-2">
+            <div class="slider-item">
+                <div class="slider-header"><span>锐化量</span><span class="slider-val" id="val-sharpen">0</span></div>
+                <input type="range" min="0" max="150" value="0" id="sharpen" oninput="updateParam('sharpenAmount', this.value)">
+            </div>
+            <div class="slider-item">
+                <div class="slider-header"><span>蒙版 (长按滑块显示黑白轮廓)</span><span class="slider-val" id="val-masking">0</span></div>
+                <input type="range" min="0" max="100" value="0" id="masking" 
+                       oninput="updateParam('sharpenMasking', this.value)"
+                       ontouchstart="setMaskPreview(true)" ontouchend="setMaskPreview(false)"
+                       onmousedown="setMaskPreview(true)" onmouseup="setMaskPreview(false)">
+            </div>
+        </div>
+    </div>
+</div>
+
+<input type="file" id="file-input" accept="image/*" style="display: none;">
+
+<!-- WebGL 2 Shader 脚本 -->
+<script>
+// ==================== 顶点着色器 ====================
+const vsSource = `#version 300 es
+in vec2 a_position;
+out vec2 v_uv;
+void main() {
+    v_uv = vec2((a_position.x + 1.0) * 0.5, (1.0 - a_position.y) * 0.5);
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}`;
+
+// ==================== 片段着色器 (融合高阶影调与锐化) ====================
+const fsSource = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+out vec4 fragColor;
+
+uniform sampler2D u_image;
+uniform vec2 u_resolution;
+
+uniform float u_exposure;
+uniform float u_contrast;
+uniform float u_highlights;
+uniform float u_shadows;
+uniform float u_satOffsets[8];
+
+uniform float u_sharpenAmount;
+uniform float u_sharpenMasking;
+uniform bool  u_showMaskOnly;
+
+const vec3 REC709 = vec3(0.2126, 0.7152, 0.0722);
+const float ANCHORS[8] = float[8](0.0, 0.0833, 0.1667, 0.3333, 0.5, 0.6667, 0.7778, 0.8889);
+const float INV_VAR[8] = float[8](147.0, 200.0, 88.9, 50.0, 50.0, 72.0, 112.5, 112.5);
+
+vec3 sRGBToLinear(vec3 c) { return pow(c, vec3(2.2)); }
+vec3 linearToSRGB(vec3 c) { return pow(c, vec3(1.0 / 2.2)); }
+
+vec3 rgbToHsl(vec3 c) {
+    float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+    float h = 0.0, s = 0.0, l = (mx + mn) * 0.5;
+    float d = mx - mn;
+    if (d > 1e-5) {
+        s = l < 0.5 ? d / (mx + mn) : d / (2.0 - mx - mn);
+        if (mx == c.r) h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
+        else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+        else h = (c.r - c.g) / d + 4.0;
+        h /= 6.0;
+    }
+    return vec3(h, s, l);
+}
+
+vec3 hslToRgb(vec3 hsl) {
+    vec3 rgb = clamp(abs(mod(hsl.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return (rgb - 0.5) * ((1.0 - abs(2.0 * hsl.z - 1.0)) * hsl.y) + hsl.z;
+}
+
+void main() {
+    vec4 src = texture(u_image, v_uv);
+    vec3 col = sRGBToLinear(src.rgb);
+
+    // 1. 曝光
+    col *= exp2(u_exposure);
+
+    // 2. 高光与阴影
+    float luma = dot(col, REC709);
+    float lumaP = pow(max(luma, 0.0), 1.0 / 2.2);
+    
+    float shdWeight = pow(clamp((0.65 - lumaP) / 0.65, 0.0, 1.0), 1.5) * smoothstep(0.0, 0.08, lumaP);
+    lumaP += (u_shadows * 0.01) * 0.35 * shdWeight;
+
+    float hlWeight = pow(clamp((lumaP - 0.3) / 0.7, 0.0, 1.0), 1.5);
+    lumaP += (u_highlights * 0.01) * 0.28 * hlWeight;
+
+    // 对比度
+    float c = (u_contrast * 0.01) * 0.8;
+    float gamma = (c >= 0.0) ? (1.0 + c) : (1.0 / (1.0 - c));
+    lumaP = (lumaP < 0.5) ? 0.5 * pow(clamp(2.0 * lumaP, 0.0, 1.0), gamma) : 1.0 - 0.5 * pow(clamp(2.0 * (1.0 - lumaP), 0.0, 1.0), gamma);
+
+    col *= (pow(max(lumaP, 0.0), 2.2) / max(luma, 1e-5));
+
+    // 3. 8色 HSL
+    vec3 hsl = rgbToHsl(col);
+    float sumW = 0.0, satDelta = 0.0;
+    for(int i = 0; i < 8; ++i) {
+        float dist = abs(hsl.x - ANCHORS[i]);
+        dist = min(dist, 1.0 - dist);
+        float w = exp(-dist * dist * INV_VAR[i]);
+        satDelta += w * u_satOffsets[i];
+        sumW += w;
+    }
+    float prot = smoothstep(0.02, 0.08, hsl.y);
+    hsl.y = clamp(hsl.y * (1.0 + (satDelta / max(sumW, 1e-4) * 0.01) * prot), 0.0, 1.0);
+    col = hslToRgb(hsl);
+
+    // 4. 细节与蒙版锐化
+    vec2 step = 1.0 / u_resolution;
+    float y00 = dot(texture(u_image, v_uv + vec2(-step.x, -step.y)).rgb, REC709);
+    float y20 = dot(texture(u_image, v_uv + vec2(step.x, -step.y)).rgb, REC709);
+    float y02 = dot(texture(u_image, v_uv + vec2(-step.x, step.y)).rgb, REC709);
+    float y22 = dot(texture(u_image, v_uv + vec2(step.x, step.y)).rgb, REC709);
+    float grad = sqrt(pow(y20 - y00, 2.0) + pow(y02 - y00, 2.0));
+
+    float mParam = u_sharpenMasking * 0.01;
+    float mask = (mParam > 0.0) ? smoothstep(mParam * 0.3, mParam * 0.3 + 0.15, grad) : 1.0;
+
+    if (u_showMaskOnly) {
+        fragColor = vec4(vec3(mask), 1.0);
+        return;
+    }
+
+    float blurLuma = (y00 + y20 + y02 + y22) * 0.25;
+    float highPass = dot(col, REC709) - blurLuma;
+    col += vec3(highPass * (u_sharpenAmount * 0.01) * mask);
+
+    fragColor = vec4(linearToSRGB(clamp(col, 0.0, 1.0)), src.a);
+}`;
+
+// ==================== WebGL 驱动逻辑 ====================
+let gl, program, rawImage = null, texture = null;
+const canvas = document.getElementById('gl-canvas');
+
+const params = {
+    exposure: 0.0, contrast: 0.0, highlights: 0.0, shadows: 0.0,
+    satOffsets: new Float32Array(8),
+    sharpenAmount: 0.0, sharpenMasking: 0.0, showMaskOnly: false
+};
+
+function initGL() {
+    gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true });
+    if (!gl) { alert('您的浏览器不支持 WebGL 2.0'); return; }
+
+    const vs = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vs, vsSource); gl.compileShader(vs);
+    const fs = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fs, fsSource); gl.compileShader(fs);
+
+    program = gl.createProgram();
+    gl.attachShader(program, vs); gl.attachShader(program, fs);
+    gl.linkProgram(program); gl.useProgram(program);
+
+    const posBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+    const posLoc = gl.getAttribLocation(program, 'a_position');
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+}
+
+function render() {
+    if (!gl || !rawImage) return;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+
+    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), canvas.width, canvas.height);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_exposure'), params.exposure);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_contrast'), params.contrast);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_highlights'), params.highlights);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_shadows'), params.shadows);
+    gl.uniform1fv(gl.getUniformLocation(program, 'u_satOffsets'), params.satOffsets);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_sharpenAmount'), params.sharpenAmount);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_sharpenMasking'), params.sharpenMasking);
+    gl.uniform1i(gl.getUniformLocation(program, 'u_showMaskOnly'), params.showMaskOnly ? 1 : 0);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+}
+
+// 图片载入 (下采样生成 1080P 视口，保证手机端 60fps)
+document.getElementById('file-input').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+            rawImage = img;
+            document.getElementById('placeholder').style.display = 'none';
+
+            // 计算视口尺寸 (限制预览分辨率)
+            const maxDimension = 1920;
+            let w = img.width, h = img.height;
+            if (w > maxDimension || h > maxDimension) {
+                if (w > h) { h = (h / w) * maxDimension; w = maxDimension; }
+                else { w = (w / h) * maxDimension; h = maxDimension; }
+            }
+            canvas.width = w; canvas.height = h;
+
+            if (texture) gl.deleteTexture(texture);
+            texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+            render();
+        };
+        img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+});
+
+// UI 交互
+let renderQueued = false;
+function requestFrame() {
+    if (!renderQueued) {
+        renderQueued = true;
+        requestAnimationFrame(() => { render(); renderQueued = false; });
+    }
+}
+
+function updateParam(name, val) {
+    params[name] = parseFloat(val);
+    document.getElementById('val-' + name.toLowerCase()).innerText = val;
+    requestFrame();
+}
+
+function updateHSL(idx, val, id) {
+    params.satOffsets[idx] = parseFloat(val);
+    document.getElementById(id).innerText = val;
+    requestFrame();
+}
+
+function setMaskPreview(active) {
+    params.showMaskOnly = active;
+    requestFrame();
+}
+
+function switchTab(index) {
+    document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === index));
+    document.querySelectorAll('.slider-group').forEach((g, i) => g.classList.toggle('active', i === index));
+}
+
+// 双击滑块回弹归零
+document.querySelectorAll('input[type=range]').forEach(slider => {
+    slider.addEventListener('dblclick', () => {
+        slider.value = 0;
+        slider.dispatchEvent(new Event('input'));
+    });
+});
+
+// 离屏无损全分辨率导出
+function exportFullRes() {
+    if (!rawImage) return;
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = rawImage.width; offCanvas.height = rawImage.height;
+    
+    // 切换到全尺寸执行单帧渲染
+    canvas.width = rawImage.width; canvas.height = rawImage.height;
+    render();
+
+    canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `CameraRaw_${Date.now()}.jpg`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }, 'image/jpeg', 0.95);
+}
+
+initGL();
+</script>
+</body>
+</html>
